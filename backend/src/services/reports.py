@@ -2,6 +2,7 @@ import time, os, csv, io, hashlib, json
 from fastapi import HTTPException
 from src.models import Job, Report, Delivery
 from src.config.settings import ARTIFACT_DIR
+from src.utils.serialization import job_result
 def create(db, data):
     j=db.get(Job,data.job_id)
     if not j or j.status!='completed' or not j.approved:
@@ -14,7 +15,8 @@ def deliver(db, report):
     if not j or not j.approved: return
     out=io.StringIO()
     out.write('\ufeff')
-    table=j.result.get('table',{})
+    result=job_result(j,db)
+    table=result.get('table',{})
     cols=table.get('columns',[])
     writer=csv.writer(out)
     def safe(v):
@@ -23,12 +25,18 @@ def deliver(db, report):
         return "'"+text if text.startswith(('=','+','-','@','\t','\r')) else text
     writer.writerow([safe(c['label']) for c in cols])
     for row in table.get('rows',[]): writer.writerow([safe(row.get(c['key'],'')) for c in cols])
+    samples=result.get('samples',{})
+    if samples.get('columns'):
+        writer.writerow([])
+        writer.writerow(['逐件起止里程'])
+        writer.writerow([safe(c['label']) for c in samples['columns']])
+        for row in samples.get('rows',[]): writer.writerow([safe(row.get(c['key'],'')) for c in samples['columns']])
     data=out.getvalue().encode('utf-8')
     delivery=Delivery(report_id=report.id, created_at=time.time(), checksum=hashlib.sha256(data).hexdigest(), filename='', destination=report.destination)
     db.add(delivery); db.flush()
     delivery.filename=f'report-{report.id}-delivery-{delivery.id}.csv'
     os.makedirs(ARTIFACT_DIR,exist_ok=True)
     with open(os.path.join(ARTIFACT_DIR,delivery.filename),'wb') as f:f.write(data)
-    with open(os.path.join(ARTIFACT_DIR,delivery.filename+'.json'),'w') as f: json.dump({'job':j.name,'params':j.params,'result':j.result,'checksum':delivery.checksum},f,ensure_ascii=False,allow_nan=False)
+    with open(os.path.join(ARTIFACT_DIR,delivery.filename+'.json'),'w') as f: json.dump({'job':j.name,'params':j.params,'result':result,'checksum':delivery.checksum},f,ensure_ascii=False,allow_nan=False)
     report.next_run=time.time()+report.interval_seconds
     return delivery

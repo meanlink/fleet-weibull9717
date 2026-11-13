@@ -12,12 +12,18 @@ def create(db, data):
     for index,row in enumerate(data.records):
         for c in metadata()['columns']:
             value=row.get(c['key'])
+            optional=not c.get('required',True)
+            if optional and (value is None or (isinstance(value,str) and not value.strip())):
+                row.pop(c['key'],None)
+                continue
             if value is None or value=='': raise HTTPException(422, f'第 {index+1} 行缺少字段 {c["label"]}')
             if c['type']=='number':
                 try:
                     if isinstance(value,bool) or not math.isfinite(float(value)): raise ValueError()
                     row[c['key']]=float(value)
                 except (TypeError, ValueError, OverflowError): raise HTTPException(422, f'第 {index+1} 行 {c["label"]} 必须为有限数值')
+        if 'start_km' in row and not (0<=row['start_km']<row['km']):
+            raise HTTPException(422, f'第 {index+1} 行 开始跟踪里程须为0至1000万公里，且早于观测里程')
     d=Dataset(name=name, source=data.source, records=data.records, checksum=checksum(data.records), created_at=time.time())
     db.add(d); db.flush()
     return d
